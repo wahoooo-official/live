@@ -1,66 +1,146 @@
 name: 24/7 RTMP Multi-Folder Stream via Tailscale
 
 on:
-  schedule:
-    - cron: '0 */5 * * *'
   workflow_dispatch:
+
+  schedule:
+    # Avvia il workflow ogni 5 ore
+    - cron: "0 */5 * * *"
 
 jobs:
   stream:
     runs-on: ubuntu-latest
+
     steps:
-    - name: Checkout del codice
-      uses: actions/checkout@v4
+      - name: Checkout del codice
+        uses: actions/checkout@v4
 
-    - name: Connessione a Tailscale
-      uses: tailscale/github-action@v2
-      with:
-        authkey: ${{ secrets.TAILSCALE_AUTHKEY }}
+      - name: Connessione a Tailscale
+        uses: tailscale/github-action@v2
+        with:
+          authkey: ${{ secrets.TAILSCALE_AUTHKEY }}
 
-    - name: Installazione FFmpeg e Rclone
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y ffmpeg curl
-        curl https://rclone.org | sudo bash
+      - name: Installazione FFmpeg e Rclone
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg curl
 
-    - name: Configurazione Rclone
-      run: |
-        # Inietta la configurazione del tuo cloud salvata nei Secrets
-        mkdir -p ~/.config/rclone
-        echo "${{ secrets.RCLONE_CONFIG_DATA }}" > ~/.config/rclone/rclone.conf
+          curl https://rclone.org | sudo bash
 
-    - name: Avvio dello Streaming Randomizzato
-      run: |
-        # Scarica la lista dei file dal cloud per velocizzare la lettura
-echo "Sincronizzazione lista file in corso..."
-mkdir -p ./video_list
-rclone lsf --files-only -R wahoooo_cloud:Streaming/ > ./video_list/tutti_i_video.txt
-rclone lsf --files-only wahoooo_cloud:Streaming/Bumber/ > ./video_list/bumber_video.txt
+          echo "FFmpeg:"
+          ffmpeg -version | head -n 1
 
+          echo "Rclone:"
+          rclone version
 
-        while true; do
-          # Genera un numero casuale tra 1 e 4 per decidere se pescare da Bumber
-          SCELTA=$((1 + RANDOM % 4))
-          
-          if [ $SCELTA -eq 1 ]; then
-            echo "Estrazione casuale da cartella: Bumber"
-            VIDEO_SCELTO=$(shuf -n 1 ./video_list/bumber_video.txt)
-            PATH_VIDEO="mio_cloud:Streaming/Bumber/$VIDEO_SCELTO"
-          else
-            echo "Estrazione casuale da tutte le cartelle"
-            # Estrae una riga a caso dalla lista totale
-            PATH_VIDEO="mio_cloud:Streaming/$(shuf -n 1 ./video_list/tutti_i_video.txt)"
-          fi
+      - name: Configurazione Rclone
+        run: |
+          mkdir -p ~/.config/rclone
 
-          echo "In riproduzione: $PATH_VIDEO"
-          
-          # Rclone trasmette il file in streaming direttamente a FFmpeg senza scaricarlo sul disco di GitHub
-          rclone cat "$PATH_VIDEO" | ffmpeg -re -i pipe:0 \
-          -c:v libx264 -preset veryfast -b:v 1500k \
-          -c:a aac -b:a 128k \
-          -f flv "rtmp://IP_TAILSCALE_MEDIAMTX:1935/live/stream" \
-          || true
-          
-          echo "Video terminato. Selezione prossimo file..."
-          sleep 2
-        done
+          echo "${{ secrets.RCLONE_CONFIG_DATA }}" > ~/.config/rclone/rclone.conf
+
+          chmod 600 ~/.config/rclone/rclone.conf
+
+          echo "Configurazione Rclone creata."
+
+      - name: Test connessione Rclone
+        run: |
+          echo "Test connessione al cloud..."
+
+          rclone lsd wahoooo_cloud:
+
+          echo "Connessione Rclone OK."
+
+      - name: Preparazione lista video
+        run: |
+          set -e
+
+          echo "Sincronizzazione lista file in corso..."
+
+          mkdir -p ./video_list
+
+          rclone lsf \
+            --files-only \
+            -R \
+            "wahoooo_cloud:Streaming/" \
+            > ./video_list/tutti_i_video.txt
+
+          rclone lsf \
+            --files-only \
+            "wahoooo_cloud:Streaming/Bumber/" \
+            > ./video_list/bumber_video.txt
+
+          echo ""
+          echo "Video totali:"
+          wc -l ./video_list/tutti_i_video.txt
+
+          echo "Video Bumber:"
+          wc -l ./video_list/bumber_video.txt
+
+          echo ""
+          echo "Prime righe della lista:"
+          head ./video_list/tutti_i_video.txt
+
+      - name: Avvio dello Streaming Randomizzato
+        run: |
+          set +e
+
+          while true; do
+
+            echo ""
+            echo "=========================================="
+            echo "Selezione nuovo video"
+            echo "=========================================="
+
+            # Numero casuale da 1 a 4
+            SCELTA=$((1 + RANDOM % 4))
+
+            if [ "$SCELTA" -eq 1 ] && [ -s ./video_list/bumber_video.txt ]; then
+
+              echo "Estrazione casuale dalla cartella Bumber"
+
+              VIDEO_SCELTO=$(shuf -n 1 ./video_list/bumber_video.txt)
+
+              PATH_VIDEO="wahoooo_cloud:Streaming/Bumber/$VIDEO_SCELTO"
+
+            else
+
+              echo "Estrazione casuale da tutte le cartelle"
+
+              VIDEO_SCELTO=$(shuf -n 1 ./video_list/tutti_i_video.txt)
+
+              PATH_VIDEO="wahoooo_cloud:Streaming/$VIDEO_SCELTO"
+
+            fi
+
+            echo "Video scelto:"
+            echo "$PATH_VIDEO"
+
+            echo ""
+            echo "Avvio FFmpeg..."
+
+            rclone cat "$PATH_VIDEO" | \
+              ffmpeg \
+                -re \
+                -i pipe:0 \
+                -c:v libx264 \
+                -preset veryfast \
+                -b:v 1500k \
+                -maxrate 1500k \
+                -bufsize 3000k \
+                -pix_fmt yuv420p \
+                -c:a aac \
+                -b:a 128k \
+                -ar 44100 \
+                -f flv \
+                "rtmp://IP_TAILSCALE_MEDIAMTX:1935/live/stream"
+
+            EXIT_CODE=$?
+
+            echo ""
+            echo "FFmpeg terminato con codice: $EXIT_CODE"
+            echo "Selezione prossimo video tra 2 secondi..."
+
+            sleep 2
+
+          done
