@@ -32,10 +32,11 @@ jobs:
     - name: Avvio dello Streaming Randomizzato
       run: |
         # Scarica la lista dei file dal cloud per velocizzare la lettura
-        echo "Sincronizzazione lista file in corso..."
-        mkdir -p ./video_list
-        rclone lsf --files-only -R mio_cloud:Streaming/ > ./video_list/tutti_i_video.txt
-        rclone lsf --files-only mio_cloud:Streaming/Bumber/ > ./video_list/bumber_video.txt
+echo "Sincronizzazione lista file in corso..."
+mkdir -p ./video_list
+rclone lsf --files-only -R wahoooo_cloud:Streaming/ > ./video_list/tutti_i_video.txt
+rclone lsf --files-only wahoooo_cloud:Streaming/Bumber/ > ./video_list/bumber_video.txt
+
 
         while true; do
           # Genera un numero casuale tra 1 e 4 per decidere se pescare da Bumber
