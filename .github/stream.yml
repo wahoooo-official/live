@@ -1,0 +1,65 @@
+name: 24/7 RTMP Multi-Folder Stream via Tailscale
+
+on:
+  schedule:
+    - cron: '0 */5 * * *'
+  workflow_dispatch:
+
+jobs:
+  stream:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout del codice
+      uses: actions/checkout@v4
+
+    - name: Connessione a Tailscale
+      uses: tailscale/github-action@v2
+      with:
+        authkey: ${{ secrets.TAILSCALE_AUTHKEY }}
+
+    - name: Installazione FFmpeg e Rclone
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y ffmpeg curl
+        curl https://rclone.org | sudo bash
+
+    - name: Configurazione Rclone
+      run: |
+        # Inietta la configurazione del tuo cloud salvata nei Secrets
+        mkdir -p ~/.config/rclone
+        echo "${{ secrets.RCLONE_CONFIG_DATA }}" > ~/.config/rclone/rclone.conf
+
+    - name: Avvio dello Streaming Randomizzato
+      run: |
+        # Scarica la lista dei file dal cloud per velocizzare la lettura
+        echo "Sincronizzazione lista file in corso..."
+        mkdir -p ./video_list
+        rclone lsf --files-only -R mio_cloud:Streaming/ > ./video_list/tutti_i_video.txt
+        rclone lsf --files-only mio_cloud:Streaming/Bumber/ > ./video_list/bumber_video.txt
+
+        while true; do
+          # Genera un numero casuale tra 1 e 4 per decidere se pescare da Bumber
+          SCELTA=$((1 + RANDOM % 4))
+          
+          if [ $SCELTA -eq 1 ]; then
+            echo "Estrazione casuale da cartella: Bumber"
+            VIDEO_SCELTO=$(shuf -n 1 ./video_list/bumber_video.txt)
+            PATH_VIDEO="mio_cloud:Streaming/Bumber/$VIDEO_SCELTO"
+          else
+            echo "Estrazione casuale da tutte le cartelle"
+            # Estrae una riga a caso dalla lista totale
+            PATH_VIDEO="mio_cloud:Streaming/$(shuf -n 1 ./video_list/tutti_i_video.txt)"
+          fi
+
+          echo "In riproduzione: $PATH_VIDEO"
+          
+          # Rclone trasmette il file in streaming direttamente a FFmpeg senza scaricarlo sul disco di GitHub
+          rclone cat "$PATH_VIDEO" | ffmpeg -re -i pipe:0 \
+          -c:v libx264 -preset veryfast -b:v 1500k \
+          -c:a aac -b:a 128k \
+          -f flv "rtmp://IP_TAILSCALE_MEDIAMTX:1935/live/stream" \
+          || true
+          
+          echo "Video terminato. Selezione prossimo file..."
+          sleep 2
+        done
